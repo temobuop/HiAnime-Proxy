@@ -1,18 +1,16 @@
-addEventListener("fetch", (event) => {
-  event.respondWith(handleRequest(event.request));
-});
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
 
-async function handleRequest(request) {
-  const url = new URL(request.url);
+    if (url.pathname === "/m3u8-proxy") {
+      return handleM3U8Proxy(request, env);
+    } else if (url.pathname === "/ts-proxy") {
+      return handleTsProxy(request, env);
+    }
 
-  if (url.pathname === "/m3u8-proxy") {
-    return handleM3U8Proxy(request);
-  } else if (url.pathname === "/ts-proxy") {
-    return handleTsProxy(request);
-  }
-
-  return new Response("Not Found", { status: 404 });
-}
+    return new Response("Not Found", { status: 404 });
+  },
+};
 
 const options = {
   originBlacklist: [],
@@ -38,19 +36,19 @@ const isOriginAllowed = (origin, options) => {
   return true;
 };
 
-const DEFAULT_HEADERS = {
-  "Referer": typeof DEFAULT_REFERER !== "undefined" ? DEFAULT_REFERER : "https://megacloud.blog",
-  "Origin": typeof DEFAULT_ORIGIN !== "undefined" ? DEFAULT_ORIGIN : "https://hianime.to"
-};
-
-async function handleM3U8Proxy(request) {
+async function handleM3U8Proxy(request, env) {
   const { searchParams } = new URL(request.url);
   const targetUrl = searchParams.get("url");
   const headers = JSON.parse(searchParams.get("headers") || "{}");
   const origin = request.headers.get("Origin") || "";
 
+  const defaultHeaders = {
+    "Referer": env.DEFAULT_REFERER || "https://megacloud.blog",
+    "Origin": env.DEFAULT_ORIGIN || "https://hianime.to"
+  };
+
   const finalHeaders = {
-    ...DEFAULT_HEADERS,
+    ...defaultHeaders,
     ...headers
   };
 
@@ -87,7 +85,7 @@ async function handleM3U8Proxy(request) {
           const keyUrl = regex.exec(line)?.[0] ?? "";
           const newUrl = `/ts-proxy?url=${encodeURIComponent(
             keyUrl
-          )}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+          )}&headers=${encodeURIComponent(JSON.stringify(finalHeaders))}`;
           newLines.push(line.replace(keyUrl, newUrl));
         } else {
           newLines.push(line);
@@ -115,14 +113,19 @@ async function handleM3U8Proxy(request) {
   }
 }
 
-async function handleTsProxy(request) {
+async function handleTsProxy(request, env) {
   const { searchParams } = new URL(request.url);
   const targetUrl = searchParams.get("url");
   const headers = JSON.parse(searchParams.get("headers") || "{}");
   const origin = request.headers.get("Origin") || "";
 
+  const defaultHeaders = {
+    "Referer": env.DEFAULT_REFERER || "https://megacloud.blog",
+    "Origin": env.DEFAULT_ORIGIN || "https://hianime.to"
+  };
+
   const finalHeaders = {
-    ...DEFAULT_HEADERS,
+    ...defaultHeaders,
     ...headers
   };
 
