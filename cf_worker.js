@@ -70,6 +70,9 @@ async function handleM3U8Proxy(request, env) {
     const lines = m3u8.split(/\r?\n/);
     const newLines = [];
 
+    // Context detection: Is this a master playlist or a media playlist?
+    const isMaster = m3u8.includes("#EXT-X-STREAM-INF") || m3u8.includes("RESOLUTION=");
+
     for (let line of lines) {
       const trimmedLine = line.trim();
       if (!trimmedLine) {
@@ -79,27 +82,23 @@ async function handleM3U8Proxy(request, env) {
 
       if (trimmedLine.startsWith("#")) {
         if (trimmedLine.startsWith("#EXT-X-KEY:") || trimmedLine.startsWith("#EXT-X-MEDIA:")) {
-          const uriMatch = trimmedLine.match(/URI=["']?([^"']+)["']?/);
-          if (uriMatch) {
-            const originalUri = uriMatch[1];
+          // Robust URI attribute replacement
+          const newLine = line.replace(/URI=["']?([^"'\s,]+)["']?/, (match, originalUri) => {
             const absoluteUri = new URL(originalUri, finalTargetUrl).href;
-            const isPlaylist = trimmedLine.includes("TYPE=AUDIO") || trimmedLine.includes("TYPE=SUBTITLES") || originalUri.includes(".m3u8");
+            const isPlaylist = line.includes("TYPE=AUDIO") || line.includes("TYPE=SUBTITLES") || originalUri.includes(".m3u8");
             const proxyPath = isPlaylist ? "/m3u8-proxy" : "/ts-proxy";
-
             const newProxiedUrl = `${workerBaseUrl}${proxyPath}?url=${encodeURIComponent(absoluteUri)}${headersParam ? `&headers=${encodeURIComponent(headersParam)}` : ""}`;
-            newLines.push(line.replace(originalUri, newProxiedUrl));
-          } else {
-            newLines.push(line);
-          }
-        } else if (trimmedLine.startsWith("#EXT-X-STREAM-INF")) {
-          newLines.push(line);
+            return match.replace(originalUri, newProxiedUrl);
+          });
+          newLines.push(newLine);
         } else {
           newLines.push(line);
         }
       } else {
         const absoluteUri = new URL(trimmedLine, finalTargetUrl).href;
-        const isM3U8 = trimmedLine.includes(".m3u8");
-        const proxyPath = isM3U8 ? "/m3u8-proxy" : "/ts-proxy";
+        // If it's a master playlist, non-comment lines are child manifests.
+        // If it's a media playlist, non-comment lines are segments.
+        const proxyPath = isMaster ? "/m3u8-proxy" : "/ts-proxy";
 
         const newProxiedUrl = `${workerBaseUrl}${proxyPath}?url=${encodeURIComponent(absoluteUri)}${headersParam ? `&headers=${encodeURIComponent(headersParam)}` : ""}`;
         newLines.push(newProxiedUrl);
@@ -112,6 +111,7 @@ async function handleM3U8Proxy(request, env) {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Headers": "*",
         "Access-Control-Allow-Methods": "*",
+        "Cache-Control": "no-cache",
         "x-request-url": targetUrl,
         "x-final-url": finalTargetUrl
       },
@@ -156,29 +156,28 @@ async function handleTsProxy(request, env) {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "*",
       "Access-Control-Allow-Methods": "*",
+      "Cache-Control": "public, max-age=3600",
       "x-request-url": targetUrl,
       "x-final-url": response.url || targetUrl
     });
 
-    const headersToForward = ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Cache-Control"];
+    const headersToForward = ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag"];
     headersToForward.forEach(h => {
       if (response.headers.has(h)) responseHeaders.set(h, response.headers.get(h));
     });
 
-    // Determine correct content-type if missing or incorrect
-    let contentType = responseHeaders.get("Content-Type");
-    if (!contentType || contentType === "text/plain") {
-      if (targetUrl.includes(".m3u8")) {
-        contentType = "application/vnd.apple.mpegurl";
-      } else if (targetUrl.includes(".ts")) {
-        contentType = "video/mp2t";
-      } else if (targetUrl.includes(".m4s")) {
-        contentType = "video/iso.segment";
-      } else if (targetUrl.includes("key") || targetUrl.includes(".key")) {
-        contentType = "application/octet-stream";
-      }
+    // Force correct content-type for segments and keys (matching local proxy behavior)
+    if (targetUrl.includes(".m3u8")) {
+      responseHeaders.set("Content-Type", "application/vnd.apple.mpegurl");
+    } else if (targetUrl.includes(".ts")) {
+      responseHeaders.set("Content-Type", "video/mp2t");
+    } else if (targetUrl.includes(".m4s")) {
+      responseHeaders.set("Content-Type", "video/iso.segment");
+    } else if (targetUrl.includes("key") || targetUrl.includes(".key") || targetUrl.includes("/key/")) {
+      responseHeaders.set("Content-Type", "application/octet-stream");
+    } else if (!responseHeaders.has("Content-Type")) {
+      responseHeaders.set("Content-Type", "video/mp2t");
     }
-    if (contentType) responseHeaders.set("Content-Type", contentType);
 
     return new Response(response.body, {
       status: response.status,
