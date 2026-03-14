@@ -195,11 +195,7 @@ const app = new Elysia()
     }),
   });
 
-app.listen(PORT);
-
-
-Logger.info(
-  `Started at ${app.server?.protocol}://${app.server?.hostname}:${PORT}`,
-);
-
-export default app; // Must use a default export
+export default {
+  port: PORT,
+  fetch: app.fetch
+}; // Expected by Bun auto-serve and Vercel
